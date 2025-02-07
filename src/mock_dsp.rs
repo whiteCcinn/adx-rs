@@ -5,13 +5,62 @@ use axum::serve;
 use tokio::time::{sleep, Duration};
 use tracing::info;
 use rand::Rng;
+use serde_json::json;
 
 // 引入 OpenRTB 数据结构，假设这些结构体已在 openrtb 模块中定义
 use crate::openrtb::request::BidRequest;
 use crate::openrtb::response::{Bid, BidResponse, SeatBid};
 
+/// 以下为辅助函数，用于生成扩展字段
+
+fn generate_nurl() -> Option<String> {
+    // 模拟生成 nurl，这里直接返回一个固定 URL
+    Some("http://example.com/nurl".to_string())
+}
+
+fn generate_adid() -> Option<String> {
+    Some("ad-12345".to_string())
+}
+
+fn generate_adomain() -> Option<Vec<String>> {
+    Some(vec!["example.com".to_string()])
+}
+
+fn generate_cid() -> Option<String> {
+    Some("cid-12345".to_string())
+}
+
+fn generate_crid() -> Option<String> {
+    Some("crid-12345".to_string())
+}
+
+fn generate_cat() -> Option<Vec<String>> {
+    Some(vec!["IAB1".to_string(), "IAB2".to_string()])
+}
+
+fn generate_attr() -> Option<Vec<i32>> {
+    Some(vec![1, 2])
+}
+
+fn generate_dealid() -> Option<String> {
+    Some("deal-123".to_string())
+}
+
+fn generate_h() -> Option<i32> {
+    Some(rand::thread_rng().gen_range(50..600))
+}
+
+fn generate_w() -> Option<i32> {
+    Some(rand::thread_rng().gen_range(50..800))
+}
+
+fn generate_ext() -> Option<serde_json::Value> {
+    Some(json!({"extra_info": "some_value"}))
+}
+
 /// 模拟 DSP 竞价响应
-/// 根据 impression 类型随机生成出价，并根据广告类型为 adm 字段注入 DSP 自己的 tracking URL。
+/// 根据每个 impression 的类型随机生成出价，并生成相应的 adm 内容，
+/// 同时在 adm 中注入 DSP 自己的 tracking URL和 {AUCTION_PRICE} 占位符。
 async fn handle_dsp_bid(Json(request): Json<BidRequest>) -> Json<BidResponse> {
     info!(
         "Mock DSP received BidRequest: id={}, imp_count={}",
@@ -19,18 +68,17 @@ async fn handle_dsp_bid(Json(request): Json<BidRequest>) -> Json<BidResponse> {
         request.imp.len()
     );
 
-    // 模拟 DSP 处理延迟（100 ~ 300 毫秒）
+    // 模拟 DSP 处理延迟：100 ~ 300 毫秒
     let delay_ms = rand::thread_rng().gen_range(100..300);
     sleep(Duration::from_millis(delay_ms)).await;
 
     let mut bids = Vec::new();
 
     for imp in &request.imp {
-        // 生成 bid id（例如 "bid-imp1"）
+        // 构造 bid id，例如 "bid-imp1"
         let bid_id = format!("bid-{}", imp.id);
-        // 读取 bidfloor，若为 None 则默认 0.0
         let bidfloor = imp.bidfloor.unwrap_or(0.0);
-        // 根据 impression 类型及 banner 尺寸决定 multiplier 范围
+        // 根据 impression 类型及 banner 尺寸确定 multiplier 范围
         let multiplier = if let Some(banner) = &imp.banner {
             if banner.w == Some(300) && banner.h == Some(250) {
                 rand::thread_rng().gen_range(1.0..3.0)
@@ -40,34 +88,31 @@ async fn handle_dsp_bid(Json(request): Json<BidRequest>) -> Json<BidResponse> {
                 rand::thread_rng().gen_range(1.0..2.0)
             }
         } else if imp.video.is_some() {
-            // 视频广告通常投入较高成本，使用较高的 multiplier 范围
             rand::thread_rng().gen_range(1.0..2.5)
         } else if imp.native.is_some() {
-            // 原生广告采用稍微灵活的范围
             rand::thread_rng().gen_range(0.8..2.0)
         } else {
-            // 默认范围
             rand::thread_rng().gen_range(1.0..2.0)
         };
 
         let price = bidfloor * multiplier;
 
-        // 根据 impression 类型决定 adm 的内容，并注入 DSP 自己的 tracking URL
-        let adm_value = if let Some(banner) = &imp.banner {
-            // Banner 广告返回 HTML 格式，包含 dsp tracking 像素和点击链接
+        // 根据 impression 类型生成 adm 字段，并注入 DSP 自己的 tracking URL和 {AUCTION_PRICE} 占位符
+        let adm_value = if let Some(_banner) = &imp.banner {
+            // Banner 广告返回 HTML 格式
             Some(format!(
-                "<html><body>Mock DSP Banner Ad<br/><a href=\"http://dsp-tracker.local/click?bid={bid_id}\" target=\"_blank\">Click Here</a><img src=\"http://dsp-tracker.local/impression?bid={bid_id}\" style=\"display:none;\" /></body></html>",
+                "<html><body>Mock DSP Banner Ad<br/>Auction Price: {{AUCTION_PRICE}}<br/><a href=\"http://dsp-tracker.local/click?bid={bid_id}\" target=\"_blank\">Click Here</a><img src=\"http://dsp-tracker.local/impression?bid={bid_id}\" style=\"display:none;\" /></body></html>",
                 bid_id = bid_id
             ))
         } else if imp.video.is_some() {
-            // 视频广告返回 VAST XML 格式，插入 Impression 和 ClickTracking 标签
+            // 视频广告返回 VAST XML 格式
             Some(format!(
                 r#"<VAST version="3.0">
   <Ad id="{bid_id}">
     <InLine>
       <AdSystem>Mock DSP</AdSystem>
       <AdTitle>Mock Video Ad</AdTitle>
-      <Impression><![CDATA[http://dsp-tracker.local/impression?bid={bid_id}]]></Impression>
+      <Impression><![CDATA[http://dsp-tracker.local/impression?bid={bid_id}&price={{AUCTION_PRICE}}]]></Impression>
       <Creatives>
         <Creative>
           <Linear>
@@ -78,7 +123,7 @@ async fn handle_dsp_bid(Json(request): Json<BidRequest>) -> Json<BidResponse> {
               </MediaFile>
             </MediaFiles>
             <VideoClicks>
-              <ClickTracking><![CDATA[http://dsp-tracker.local/click?bid={bid_id}]]></ClickTracking>
+              <ClickTracking><![CDATA[http://dsp-tracker.local/click?bid={bid_id}&price={{AUCTION_PRICE}}]]></ClickTracking>
             </VideoClicks>
           </Linear>
         </Creative>
@@ -89,15 +134,15 @@ async fn handle_dsp_bid(Json(request): Json<BidRequest>) -> Json<BidResponse> {
                 bid_id = bid_id
             ))
         } else if imp.native.is_some() {
-            // 原生广告返回 JSON 格式的创意，注入 tracking URL 字段
+            // 原生广告返回 JSON 格式的创意数据，注入 tracking 字段和 {AUCTION_PRICE} 占位符
             Some(format!(
-                r#"{{"native":{{"assets":[{{"title":{{"text":"Mock Native Ad"}}}},{{"img":{{"url":"http://example.com/native.jpg"}}}}],"impression_tracking":"http://dsp-tracker.local/impression?bid={bid_id}","click_tracking":"http://dsp-tracker.local/click?bid={bid_id}"}}}}"#,
+                r#"{{"native":{{"assets":[{{"title":{{"text":"Mock Native Ad"}}}},{{"img":{{"url":"http://example.com/native.jpg"}}}}],"impression_tracking":"http://dsp-tracker.local/impression?bid={bid_id}&price={{AUCTION_PRICE}}","click_tracking":"http://dsp-tracker.local/click?bid={bid_id}&price={{AUCTION_PRICE}}"}}}}"#,
                 bid_id = bid_id
             ))
         } else {
             // 默认返回 HTML 格式
             Some(format!(
-                "<html><body>Mock DSP Ad<br/><img src=\"http://dsp-tracker.local/impression?bid={bid_id}\" style=\"display:none;\" /></body></html>",
+                "<html><body>Mock DSP Ad<br/>Auction Price: {{AUCTION_PRICE}}<br/><img src=\"http://dsp-tracker.local/impression?bid={bid_id}\" style=\"display:none;\" /></body></html>",
                 bid_id = bid_id
             ))
         };
@@ -107,17 +152,17 @@ async fn handle_dsp_bid(Json(request): Json<BidRequest>) -> Json<BidResponse> {
             impid: imp.id.clone(),
             price,
             adm: adm_value,
-            nurl: None,
-            adid: None,
-            adomain: None,
-            cid: None,
-            crid: None,
-            cat: None,
-            attr: None,
-            dealid: None,
-            h: None,
-            w: None,
-            ext: None,
+            nurl: generate_nurl(),
+            adid: generate_adid(),
+            adomain: generate_adomain(),
+            cid: generate_cid(),
+            crid: generate_crid(),
+            cat: generate_cat(),
+            attr: generate_attr(),
+            dealid: generate_dealid(),
+            h: generate_h(),
+            w: generate_w(),
+            ext: generate_ext(),
         });
     }
 

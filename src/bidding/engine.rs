@@ -10,70 +10,68 @@ use crate::logging::runtime_logger::RuntimeLogger;
 use crate::openrtb::request::BidRequest;
 use crate::openrtb::response::{Bid, BidResponse, SeatBid};
 
-/// 辅助函数，根据 adm 内容判断广告类型，并注入 tracking URL
-fn inject_tracking(adm: &str, bid_id: &str) -> String {
+/// 辅助函数，根据 DSP 下发的 adm 内容注入 SSP tracking 信息，保留 {AUCTION_PRICE} 占位符。
+fn inject_ssp_tracking(adm: &str) -> String {
+    // Banner 类型（HTML）
     if adm.contains("<html") {
-        // Banner 广告：在 </body> 之前注入一个隐形的 tracking 像素
-        let tracking_pixel = format!(
-            "<img src=\"http://tk.rust-adx.com/impression?bid={}\" style=\"display:none;\" />",
-            bid_id
-        );
+        let ssp_tag = "<img src=\"http://tk.rust-adx.com/impression?price={AUCTION_PRICE}\" style=\"display:none;\" />";
         if let Some(pos) = adm.rfind("</body>") {
             let (head, tail) = adm.split_at(pos);
-            format!("{}{}{}", head, tracking_pixel, tail)
+            format!("{}{}{}", head, ssp_tag, tail)
         } else {
-            format!("{}{}", adm, tracking_pixel)
+            format!("{}{}", adm, ssp_tag)
         }
-    } else if adm.contains("<VAST") {
-        // Video 广告：在 <InLine> 标签后插入 <Impression> 标签
-        let impression_tag = format!(
-            "<Impression><![CDATA[http://tk.rust-adx.com/impression?bid={}]]></Impression>",
-            bid_id
-        );
+    }
+    // Video 类型（VAST XML）
+    else if adm.contains("<VAST") {
+        let ssp_tag = "<Impression><![CDATA[http://tk.rust-adx.com/impression?price={AUCTION_PRICE}]]></Impression>";
         if let Some(pos) = adm.find("<InLine>") {
             let pos = pos + "<InLine>".len();
             let (head, tail) = adm.split_at(pos);
-            format!("{}{}{}", head, impression_tag, tail)
+            format!("{}{}{}", head, ssp_tag, tail)
         } else {
             adm.to_string()
         }
-    } else {
-        // Native 广告：尝试解析 JSON，然后注入 tracking 字段
-        if let Ok(mut v) = serde_json::from_str::<Value>(adm) {
+    }
+    // Native 类型（JSON）
+    else if adm.trim_start().starts_with("{") {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(adm) {
             if let Value::Object(ref mut map) = v {
                 map.insert(
-                    "impression_tracking".to_string(),
-                    Value::String(format!("http://tk.rust-adx.com/impression?bid={}", bid_id)),
+                    "ssp_impression_tracking".to_string(),
+                    Value::String("http://tk.rust-adx.com/impression?price={AUCTION_PRICE}".to_string()),
                 );
                 map.insert(
-                    "click_tracking".to_string(),
-                    Value::String(format!("http://tk.rust-adx.com/click?bid={}", bid_id)),
+                    "ssp_click_tracking".to_string(),
+                    Value::String("http://tk.rust-adx.com/click?price={AUCTION_PRICE}".to_string()),
                 );
             }
             v.to_string()
         } else {
-            // 如果解析失败，则直接返回原始 adm
             adm.to_string()
         }
+    }
+    // 默认直接返回原始 adm
+    else {
+        adm.to_string()
     }
 }
 
 /// 处理竞价请求
-/// 参数中增加了 runtime_logger 用于记录整条调用链日志。
+/// 在 DSP 调用后，对返回结果进行聚合处理，选出获胜竞价后：
+/// 1. 记录 DSP 原始价格和扣除利润后的最终价格；
+/// 2. 替换 DSP 下发的 offer（adm 字段）中原始部分的 {AUCTION_PRICE} 占位符为最终价格；
+/// 3. 注入 ADX 自身的 SSP tracking 信息（tracking URL中仍保留 {AUCTION_PRICE} 占位符）。
 pub async fn process_bid_request(
     bid_request: &BidRequest,
     config: &ConfigManager,
     log_manager: &Arc<LogManager>,
     runtime_logger: &Arc<RuntimeLogger>,
 ) -> Option<BidResponse> {
-    // 将 bid_request 包装成 Arc
-    let bid_request_arc = Arc::new((*bid_request).clone());
+    let bid_request_arc = Arc::new(bid_request.clone());
     let dsp_client = DspClient::new(config.active_demands());
 
-    // 聚合各个 DSP 调用的详细信息
     let mut dsp_details = Vec::new();
-
-    // 调用 DSP 获取竞价响应，返回元组包含 dsp_id、url、出价、BidResponse、状态和耗时
     let bid_responses = dsp_client.fetch_bids(&bid_request_arc).await;
 
     let mut valid_responses = Vec::new();
@@ -100,7 +98,6 @@ pub async fn process_bid_request(
             }).to_string());
             continue;
         }
-
         if bid_response.seatbid.is_empty() {
             failed_dsp_logs.push(json!({
                 "dsp_id": dsp_id,
@@ -111,7 +108,6 @@ pub async fn process_bid_request(
             }).to_string());
             continue;
         }
-
         valid_responses.push((bid_response, price));
     }
 
@@ -121,7 +117,7 @@ pub async fn process_bid_request(
             "adx_log": "dsp_inquiry_failed",
             "details": failed_dsp_logs,
         });
-        log_manager.log("ERROR", log_entry.to_string()).await;
+        log_manager.log("ERROR", &log_entry.to_string()).await;
     }
 
     let adx_result;
@@ -134,7 +130,7 @@ pub async fn process_bid_request(
             "adx_log": "adx_inquiry_failed",
             "reason": "all_dsp_failed",
         });
-        log_manager.log("ERROR", log_entry.to_string()).await;
+        log_manager.log("ERROR", &log_entry.to_string()).await;
         winning_bid_opt = None;
     } else {
         valid_responses.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -142,7 +138,6 @@ pub async fn process_bid_request(
         for (winning_response, _) in valid_responses {
             for seatbid in winning_response.seatbid {
                 for bid in seatbid.bid {
-                    // 检查敏感内容
                     if contains_sensitive_content(&bid) {
                         let log_entry = json!({
                             "request_id": bid_request.id,
@@ -150,7 +145,7 @@ pub async fn process_bid_request(
                             "bid_id": bid.id,
                             "reason": "contains_sensitive_content",
                         });
-                        log_manager.log("WARN", log_entry.to_string()).await;
+                        log_manager.log("WARN", &log_entry.to_string()).await;
                         continue;
                     }
                     checked_bids.push(bid.clone());
@@ -164,35 +159,30 @@ pub async fn process_bid_request(
                 "adx_log": "adx_inquiry_failed",
                 "reason": "all_bids_filtered",
             });
-            log_manager.log("ERROR", log_entry.to_string()).await;
+            log_manager.log("ERROR", &log_entry.to_string()).await;
             winning_bid_opt = None;
         } else {
             checked_bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
-            let winning_bid = checked_bids.first().unwrap().clone();
+            let mut winning_bid = checked_bids.first().unwrap().clone();
             adx_result = "success";
+            let original_price = winning_bid.price;
+            let final_price = original_price * 0.8; // 扣除20%利润后的价格
+
+            // 先对 DSP 下发的原始 adm（不包含 ADX tracking）进行替换，将其中的 {AUCTION_PRICE} 替换为 final_price
+            if let Some(original_adm) = winning_bid.adm.as_ref() {
+                let dsp_adm_replaced = original_adm.replace("{AUCTION_PRICE}", &final_price.to_string());
+                // 然后注入 SSP tracking（此部分 tracking 中仍保留 {AUCTION_PRICE} 占位符）
+                let adm_with_tracking = inject_ssp_tracking(&dsp_adm_replaced);
+                winning_bid.adm = Some(adm_with_tracking);
+            }
+            let price_info = json!({
+                "original_price": original_price,
+                "final_price": final_price
+            });
+            dsp_details.push(price_info);
             winning_bid_opt = Some(winning_bid);
         }
     }
-
-    // 在返回最终 BidResponse 前，对获胜 Bid 的 adm 字段注入 tracking URL
-    let final_bid_response = winning_bid_opt.clone().map(|mut winning_bid| {
-        if let Some(adm) = winning_bid.adm.as_ref() {
-            let new_adm = inject_tracking(adm, &winning_bid.id);
-            winning_bid.adm = Some(new_adm);
-        }
-        BidResponse {
-            id: bid_request.id.clone(),
-            seatbid: vec![SeatBid {
-                bid: vec![winning_bid.clone()],
-                seat: Some("".to_string()),
-                group: Some(0),
-            }],
-            bidid: None,
-            cur: Some("USD".to_string()),
-            customdata: None,
-            nbr: None,
-        }
-    });
 
     let aggregated_log = json!({
         "request_id": bid_request.id,
@@ -203,7 +193,20 @@ pub async fn process_bid_request(
     let aggregated_log_str = aggregated_log.to_string();
     runtime_logger.log("INFO", &aggregated_log_str).await;
 
-    final_bid_response
+    winning_bid_opt.map(|winning_bid| {
+        BidResponse {
+            id: bid_request.id.clone(),
+            seatbid: vec![SeatBid {
+                bid: vec![winning_bid],
+                seat: Some("".to_string()),
+                group: Some(0),
+            }],
+            bidid: None,
+            cur: Some("USD".to_string()),
+            customdata: None,
+            nbr: None,
+        }
+    })
 }
 
 /// 检查 Bid 是否包含敏感内容
