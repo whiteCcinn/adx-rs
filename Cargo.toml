@@ -21,3 +21,7 @@ tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["json", "env-filter"] }
 futures = "0.3.31"
+proptest = "1.6"         # ✅ 直接使用 `proptest`，不要加 `features`
+chrono = "0.4.39"
+uuid = { version = "1.13.1", features = ["v4"] }
+rand = "0.8.5"

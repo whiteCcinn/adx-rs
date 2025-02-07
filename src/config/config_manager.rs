@@ -1,15 +1,31 @@
-#[derive(Clone, Debug)]
+use crate::bidding::dsp::{Demand, DemandManager};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigManager {
-    pub dsp_endpoints: Vec<String>,
+    pub demand_manager: DemandManager,
 }
 
 impl ConfigManager {
-    pub fn new(dsp_endpoints: Vec<String>) -> Self {
-        ConfigManager { dsp_endpoints }
+    pub fn new(demand_manager: DemandManager) -> Self {
+        Self { demand_manager }
     }
 
-    pub fn from_args(dsp_endpoints: &str) -> Self {
-        let endpoints = dsp_endpoints.split(',').map(String::from).collect();
-        ConfigManager::new(endpoints)
+    /// **获取所有可用的 `Demand`**
+    pub fn active_demands(&self) -> Vec<Demand> {
+        self.demand_manager
+            .active_demands()
+            .iter()
+            .filter(|d| d.status)
+            .cloned()
+            .collect()
+    }
+
+    pub fn active_dsp_urls(&self) -> Vec<String> {
+        self.demand_manager
+            .active_demands()
+            .iter()
+            .map(|demand| demand.url.clone())
+            .collect()
     }
 }
