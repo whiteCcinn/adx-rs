@@ -1,0 +1,18 @@
+[
+  {
+    "ssp_id": 100,
+    "ssp_uuid": "ssp-uuid-001",
+    "placement_id": "placement-001",
+    "ad_type": 2,
+    "update_time": 1630000000,
+    "status": 1
+  },
+  {
+    "ssp_id": 101,
+    "ssp_uuid": "ssp-uuid-002",
+    "placement_id": "placement-002",
+    "ad_type": 3,
+    "update_time": 1630000100,
+    "status": 1
+  }
+]

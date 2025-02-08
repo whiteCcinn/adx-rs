@@ -1,3 +1,5 @@
+// openrtb/response.rs
+
 use serde::{Serialize, Deserialize};
 
 /// **Top-level OpenRTB Bid Response（竞价响应）**

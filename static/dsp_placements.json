@@ -1,0 +1,22 @@
+[
+  {
+    "dsp_id": 200,
+    "dsp_uuid": "dsp-uuid-001",
+    "tag_id": "tag-001",
+    "custom_ad_type": "banner+video",
+    "profit_rate": 0.2,
+    "auth": "{\"width\":300,\"height\":250}",
+    "update_time": 1630000200,
+    "status": 1
+  },
+  {
+    "dsp_id": 201,
+    "dsp_uuid": "dsp-uuid-002",
+    "tag_id": "tag-002",
+    "custom_ad_type": "native",
+    "profit_rate": 0.15,
+    "auth": "{}",
+    "update_time": 1630000300,
+    "status": 1
+  }
+]
