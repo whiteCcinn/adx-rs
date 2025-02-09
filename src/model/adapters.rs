@@ -31,11 +31,25 @@ impl FileConfigAdapter {
 }
 
 impl ConfigAdapter for FileConfigAdapter {
-    fn get_ssp_placements(&self) -> Vec<SspPlacement> {
-        let content = fs::read_to_string(&self.ssp_file).unwrap_or_else(|_| "[]".to_string());
+     fn get_ssp_placements(&self) -> Vec<SspPlacement> {
+        let content = fs::read_to_string(&self.ssp_file).unwrap_or_else(|_| {
+            eprintln!("Failed to read {}", &self.ssp_file);
+            "[]".to_string()
+        });
+        println!("Read ssp_placements.json: {}", content);
         let config: JsonResult<Vec<SspPlacement>> = serde_json::from_str(&content);
-        config.unwrap_or_default()
+        match config {
+            Ok(placements) => {
+                println!("Parsed {} SSP placements", placements.len());
+                placements
+            },
+            Err(e) => {
+                eprintln!("Failed to parse ssp_placements.json: {}", e);
+                vec![]
+            }
+        }
     }
+
 
     fn get_dsp_placements(&self) -> Vec<DspPlacement> {
         let content = fs::read_to_string(&self.dsp_file).unwrap_or_else(|_| "[]".to_string());

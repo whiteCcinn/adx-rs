@@ -4,39 +4,37 @@ use std::sync::Arc;
 use tokio::time::Duration;
 use serde_json::{json, Value};
 use tracing::info;
+use std::time::Instant;
 
 use crate::bidding::dsp_client::DspClient;
 use crate::config::config_manager::ConfigManager;
-use crate::logging::adx_log::log_adx_call_chain;
 use crate::logging::runtime_logger::RuntimeLogger;
-use crate::openrtb::request::BidRequest;
 use crate::openrtb::response::{Bid, BidResponse, SeatBid};
+use crate::model::context::Context;
 
-/// 辅助函数，根据 DSP 下发的 adm 内容生成 ADX 注入的 SSP tracking 代码（保留 {AUCTION_PRICE} 占位符）
+/// 辅助函数，根据 DSP 下发的 adm 内容生成 ADX 注入的 SSP tracking 部分（保留 {AUCTION_PRICE} 占位符）
 fn generate_ssp_tracking(adm: &str) -> String {
     if adm.contains("<html") {
         "<img src=\"http://tk.rust-adx.com/impression?price={AUCTION_PRICE}\" style=\"display:none;\" />".to_string()
     } else if adm.contains("<VAST") {
         "<Impression><![CDATA[http://tk.rust-adx.com/impression?price={AUCTION_PRICE}]]></Impression>".to_string()
     } else if adm.trim_start().starts_with("{") {
-        "".to_string() // native 类型不注入额外 tracking
+        "".to_string() // native 类型不额外注入
     } else {
         "".to_string()
     }
 }
 
-/// 处理竞价请求
-/// 1. 聚合 DSP 响应，选出获胜竞价
-/// 2. 计算原始价格和最终价格（扣除20%利润）
+/// 处理竞价请求，参数为 Context，贯穿整个调用链的信息
 pub async fn process_bid_request(
-    bid_request: &BidRequest,
+    context: &Context,
     config: &ConfigManager,
     runtime_logger: &Arc<RuntimeLogger>,
 ) -> Option<BidResponse> {
-    let bid_request_arc = Arc::new(bid_request.clone());
+    let bid_request = &context.bid_request;
     let dsp_client = DspClient::new(config.active_demands());
     let mut dsp_details = Vec::new();
-    let bid_responses = dsp_client.fetch_bids(&bid_request_arc).await;
+    let bid_responses = dsp_client.fetch_bids(&Arc::new(bid_request.clone())).await;
     let mut valid_responses = Vec::new();
     let mut failed_dsp_logs = Vec::new();
 
@@ -101,7 +99,6 @@ pub async fn process_bid_request(
         for (winning_response, _) in valid_responses {
             for seatbid in winning_response.seatbid {
                 for bid in seatbid.bid {
-                    // 过滤敏感内容
                     if contains_sensitive_content(&bid) {
                         let log_entry = json!({
                             "request_id": bid_request.id,
@@ -130,10 +127,10 @@ pub async fn process_bid_request(
             let mut winning_bid = checked_bids.first().unwrap().clone();
             adx_result = "success";
             let original_price = winning_bid.price;
-            let final_price = original_price * 0.8; // 扣除20%利润
+            let final_price = original_price * 0.8; // 扣除20%利润后的价格
 
-            // 先替换 DSP 下发的 adm 中的 {AUCTION_PRICE} 为 final_price，
-            // 然后生成 ADX 自身注入的 SSP tracking（tracking URL中依然保留 {AUCTION_PRICE} 占位符），并追加
+            // 先替换 DSP 下发的 offer 中的 {AUCTION_PRICE} 占位符为 final_price，
+            // 然后生成 ADX 注入的 SSP tracking（其中 tracking URL 保留 {AUCTION_PRICE} 占位符），并追加
             if let Some(original_adm) = winning_bid.adm.as_ref() {
                 let dsp_adm_processed = original_adm.replace("{AUCTION_PRICE}", &final_price.to_string());
                 let ssp_tracking = generate_ssp_tracking(original_adm);
@@ -149,14 +146,26 @@ pub async fn process_bid_request(
         }
     }
 
+    // 记录整个调用链耗时，并判断是否超过 bid_request.tmax
+    let elapsed_total = context.start_time.elapsed();
+    if let Some(tmax) = bid_request.tmax {
+        if elapsed_total > Duration::from_millis(tmax) {
+            runtime_logger.log("WARN", &format!(
+                "Processing time {} ms exceeded tmax {} ms",
+                elapsed_total.as_millis(),
+                tmax
+            )).await;
+        }
+    }
+
     let aggregated_log = json!({
         "request_id": bid_request.id,
         "adx_inquiry_result": adx_result,
         "winning_bid": winning_bid_opt,
         "dsp_call_details": dsp_details,
+        "elapsed_time_ms": elapsed_total.as_millis(),
     });
-    // 调用 adx_log 记录调用链信息
-    log_adx_call_chain(&aggregated_log);
+    runtime_logger.log("INFO", &aggregated_log.to_string()).await;
 
     winning_bid_opt.map(|winning_bid| {
         BidResponse {
@@ -174,7 +183,6 @@ pub async fn process_bid_request(
     })
 }
 
-/// 检查 Bid 是否包含敏感内容
 fn contains_sensitive_content(bid: &Bid) -> bool {
     let content = format!(
         "{} {}",

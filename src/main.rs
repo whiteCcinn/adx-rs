@@ -1,11 +1,14 @@
+// src/main.rs
+
 use axum::{Router, routing::post, serve};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::signal;
-use tracing::info;
+use tracing::{info};
 use tracing_subscriber::{fmt, EnvFilter, Registry};
 use tracing_appender::rolling;
 use tokio::net::TcpListener;
+use std::fs;
 use tracing_subscriber::layer::SubscriberExt;
 
 mod api;
@@ -21,6 +24,8 @@ use config::config_manager::ConfigManager;
 use logging::runtime_logger::RuntimeLogger;
 use model::adapters::FileConfigAdapter;
 use model::dsp::init as dsp_init;
+use model::ssp::Ssp;
+use model::context::Context;
 use crate::model::adapters::ConfigAdapter;
 
 #[derive(Clone)]
@@ -48,7 +53,7 @@ async fn main() {
     // 初始化 DSP 基础信息
     let demand_manager = dsp_init();
 
-    // 启动 Mock DSP 服务器
+    // 启动 Mock DSP 服务器（监听 9001 端口）
     let dsp_mock_server = tokio::spawn(async {
         mock_dsp::start_mock_dsp_server(9001).await;
     });
@@ -63,7 +68,7 @@ async fn main() {
         .expect("Unable to set global tracing subscriber");
     info!("ADX server starting on port {}", args.port);
 
-    // 初始化运行日志记录器（runtime_logger），用于记录服务运行过程中的状态
+    // 初始化运行日志记录器（用于记录服务运行状态、调试、错误等）
     let runtime_logger = RuntimeLogger::new(&args.log_dir, "runtime", 1000, 100, 1000);
     runtime_logger.log("INFO", "ADX server is starting...").await;
 
@@ -71,6 +76,50 @@ async fn main() {
     let adapter = FileConfigAdapter::new("static/ssp_placements.json", "static/dsp_placements.json");
     let config = Arc::new(ConfigManager::new(demand_manager));
     config.update_placements(adapter.get_ssp_placements(), adapter.get_dsp_placements());
+
+    // 读取 ssp_info.json，得到所有 SSP 基础信息
+    let ssp_info_str = fs::read_to_string("static/ssp_info.json")
+        .expect("Unable to read ssp_info.json");
+    let ssp_vec: Vec<Ssp> = serde_json::from_str(&ssp_info_str)
+        .expect("Unable to parse ssp_info.json");
+
+    // 假设请求中有 SSP 的标识（例如 ssp_uuid），这里示例默认选择第一个 SSP
+    let ssp = ssp_vec.first().cloned().expect("No SSP info available");
+
+    // 从 ConfigManager 中获取 SSP 广告位配置（假设返回的是 Vec<SspPlacement>）
+    let ssp_placements = config.get_ssp_placements();
+    // 根据 SSP 的 uuid 进行匹配，假设 ssp.uuid 与 SspPlacement.ssp_uuid 对应
+    let ssp_placement = ssp_placements.into_iter()
+        .find(|sp| sp.ssp_uuid == ssp.uuid)
+        .expect("No matching SSP placement found");
+
+    // 构造 Context，注意 ssp_placement 为单个广告位信息
+    let context = Context {
+        bid_request: openrtb::request::BidRequest {
+            id: "test-request-001".to_string(),
+            imp: Vec::new(), // 实际场景中填充广告展示请求
+            site: None,
+            app: None,
+            device: None,
+            user: None,
+            test: None,
+            at: None,
+            tmax: None,
+            wseat: None,
+            bseat: None,
+            allimps: None,
+            cur: None,
+            wlang: None,
+            bcat: None,
+            badv: None,
+            source: None,
+            regs: None,
+        },
+        ssp,
+        ssp_placement,
+        dsp_requests: Vec::new(), // 后续可以根据 active_dsps 和 dsp_placements 进行关联构造
+        start_time: std::time::Instant::now(),
+    };
 
     let state = Arc::new(AppState {
         runtime_logger: runtime_logger.clone(),
@@ -92,8 +141,12 @@ async fn main() {
         }
     });
 
-    signal::ctrl_c().await.expect("Failed to listen for shutdown signal");
-    runtime_logger.log("INFO", "Shutting down gracefully...").await;
+    tokio::select! {
+        _ = signal::ctrl_c() => {
+            runtime_logger.log("INFO", "Shutting down gracefully...").await;
+        }
+    }
+
     runtime_logger.shutdown().await;
     tokio::try_join!(adx_server, dsp_mock_server).unwrap();
     runtime_logger.log("INFO", "ADX server shut down.").await;

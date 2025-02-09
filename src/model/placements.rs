@@ -1,15 +1,35 @@
 // src/model/placements.rs
 
 use serde::{Serialize, Deserialize};
+use std::convert::TryFrom;
 
-/// 广告类型枚举，对应 OpenRTB 协议中的广告类型
-/// 1 = native, 2 = banner, 3 = video
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(try_from = "u8", into = "u8")]
 pub enum AdType {
     Native = 1,
     Banner = 2,
     Video = 3,
 }
+
+impl TryFrom<u8> for AdType {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(AdType::Native),
+            2 => Ok(AdType::Banner),
+            3 => Ok(AdType::Video),
+            _ => Err(format!("Invalid value for AdType: {}", value)),
+        }
+    }
+}
+
+impl From<AdType> for u8 {
+    fn from(ad: AdType) -> Self {
+        ad as u8
+    }
+}
+
 
 /// SSP 广告位基础信息
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -28,11 +28,7 @@ impl ConfigManager {
     }
 
     pub fn active_dsp_urls(&self) -> Vec<String> {
-        self.demand_manager
-            .active_demands()
-            .iter()
-            .map(|d| d.url.clone())
-            .collect()
+        self.demand_manager.active_demands().iter().map(|d| d.url.clone()).collect()
     }
 
     pub fn get_ssp_placements(&self) -> Vec<SspPlacement> {

@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "uuid": "ssp-uuid-001",
+    "name": "Test SSP 1",
+    "qps": 100
+  },
+  {
+    "id": 2,
+    "uuid": "ssp-uuid-002",
+    "name": "Test SSP 2",
+    "qps": 150
+  }
+]

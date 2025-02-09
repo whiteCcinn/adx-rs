@@ -31,3 +31,97 @@ src/
       ├── ssp_placements.json  // SSP 广告位配置
       └── dsp_placements.json   // DSP 广告位配置
  ```
+
+调试代码
+```shell
+curl -X POST "http://127.0.0.1:8080/openrtb?ssp_uuid=ssp-uuid-001" \                                                                                                
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "1234",
+    "imp": [
+      {
+        "id": "imp1",
+        "banner": { "w": 300, "h": 250 },
+        "bidfloor": 0.5
+      },
+      {
+        "id": "imp2",
+        "banner": { "w": 728, "h": 90 },
+        "bidfloor": 1.0
+      },
+      {
+        "id": "imp3",
+        "video": {
+          "mimes": ["video/mp4"],
+          "minduration": 5,
+          "maxduration": 30,
+          "w": 640,
+          "h": 360,
+          "protocols": [2, 3]
+        },
+        "bidfloor": 0.8
+      },
+      {
+        "id": "imp4",
+        "native": {
+          "request": "{\"native\":{\"assets\":[{\"title\":{\"text\":\"Native Ad Title\"}},{\"img\":{\"url\":\"http://example.com/native.jpg\"}}]}}"
+        },
+        "bidfloor": 0.7
+      }
+    ],
+    "site": {
+      "id": "5678",
+      "name": "example.com"
+    },
+    "user": {
+      "id": "user1"
+    },
+    "tmax": 100
+}' | jq .
+```
+
+响应例子：
+```json
+{
+  "id": "1234",
+  "seatbid": [
+    {
+      "bid": [
+        {
+          "id": "bid-imp3",
+          "impid": "imp3",
+          "price": 1.7844350876654955,
+          "nurl": "http://example.com/nurl",
+          "adm": "<VAST version=\"3.0\">\n  <Ad id=\"bid-imp3\">\n    <InLine>\n      <AdSystem>Mock DSP</AdSystem>\n      <AdTitle>Mock Video Ad</AdTitle>\n      <Impression><![CDATA[http://dsp-tracker.local/impression?bid=bid-imp3&price=1.4275480701323966]]></Impression>\n      <Creatives>\n        <Creative>\n          <Linear>\n            <Duration>00:00:30</Duration>\n            <MediaFiles>\n              <MediaFile delivery=\"progressive\" type=\"video/mp4\" width=\"640\" height=\"360\" bitrate=\"500\">\n                http://example.com/video.mp4\n              </MediaFile>\n            </MediaFiles>\n            <VideoClicks>\n              <ClickTracking><![CDATA[http://dsp-tracker.local/click?bid=bid-imp3&price=1.4275480701323966]]></ClickTracking>\n            </VideoClicks>\n          </Linear>\n        </Creative>\n      </Creatives>\n    </InLine>\n  </Ad>\n</VAST><Impression><![CDATA[http://tk.rust-adx.com/impression?price={AUCTION_PRICE}]]></Impression>",
+          "adid": "ad-12345",
+          "adomain": [
+            "example.com"
+          ],
+          "cid": "cid-12345",
+          "crid": "crid-12345",
+          "cat": [
+            "IAB1",
+            "IAB2"
+          ],
+          "attr": [
+            1,
+            2
+          ],
+          "dealid": "deal-123",
+          "h": 519,
+          "w": 264,
+          "ext": {
+            "extra_info": "some_value"
+          }
+        }
+      ],
+      "seat": "",
+      "group": 0
+    }
+  ],
+  "bidid": null,
+  "cur": "USD",
+  "customdata": null,
+  "nbr": null
+}
+```
