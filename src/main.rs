@@ -25,13 +25,13 @@ use logging::runtime_logger::RuntimeLogger;
 use model::adapters::FileConfigAdapter;
 use model::dsp::init as dsp_init;
 use model::ssp::Ssp;
-use model::context::Context;
 use crate::model::adapters::ConfigAdapter;
 
 #[derive(Clone)]
 pub struct AppState {
     pub runtime_logger: Arc<RuntimeLogger>,
     pub config: Arc<ConfigManager>,
+    pub ssp_info: Vec<Ssp>,
 }
 
 #[derive(Parser, Debug)]
@@ -68,62 +68,24 @@ async fn main() {
         .expect("Unable to set global tracing subscriber");
     info!("ADX server starting on port {}", args.port);
 
-    // 初始化运行日志记录器（用于记录服务运行状态、调试、错误等）
+    // 初始化运行日志记录器
     let runtime_logger = RuntimeLogger::new(&args.log_dir, "runtime", 1000, 100, 1000);
     runtime_logger.log("INFO", "ADX server is starting...").await;
 
-    // 初始化 ConfigManager，并使用 FileConfigAdapter 从 /static 目录读取广告位配置
-    let adapter = FileConfigAdapter::new("static/ssp_placements.json", "static/dsp_placements.json");
+    // 初始化 ConfigManager，并使用 FileConfigAdapter 从 /static 目录读取 SSP 广告位和 DSP 广告位配置
+    let adapter = FileConfigAdapter::new("static/ssp_placements.json", "static/dsp_placements.json", "static/ssp_info.json");
     let config = Arc::new(ConfigManager::new(demand_manager));
     config.update_placements(adapter.get_ssp_placements(), adapter.get_dsp_placements());
 
-    // 读取 ssp_info.json，得到所有 SSP 基础信息
-    let ssp_info_str = fs::read_to_string("static/ssp_info.json")
-        .expect("Unable to read ssp_info.json");
-    let ssp_vec: Vec<Ssp> = serde_json::from_str(&ssp_info_str)
-        .expect("Unable to parse ssp_info.json");
+    // 从 FileConfigAdapter 中读取 SSP 基础信息（多个 SSP）
+    let ssp_info = adapter.get_ssp_info();
 
-    // 假设请求中有 SSP 的标识（例如 ssp_uuid），这里示例默认选择第一个 SSP
-    let ssp = ssp_vec.first().cloned().expect("No SSP info available");
-
-    // 从 ConfigManager 中获取 SSP 广告位配置（假设返回的是 Vec<SspPlacement>）
-    let ssp_placements = config.get_ssp_placements();
-    // 根据 SSP 的 uuid 进行匹配，假设 ssp.uuid 与 SspPlacement.ssp_uuid 对应
-    let ssp_placement = ssp_placements.into_iter()
-        .find(|sp| sp.ssp_uuid == ssp.uuid)
-        .expect("No matching SSP placement found");
-
-    // 构造 Context，注意 ssp_placement 为单个广告位信息
-    let context = Context {
-        bid_request: openrtb::request::BidRequest {
-            id: "test-request-001".to_string(),
-            imp: Vec::new(), // 实际场景中填充广告展示请求
-            site: None,
-            app: None,
-            device: None,
-            user: None,
-            test: None,
-            at: None,
-            tmax: None,
-            wseat: None,
-            bseat: None,
-            allimps: None,
-            cur: None,
-            wlang: None,
-            bcat: None,
-            badv: None,
-            source: None,
-            regs: None,
-        },
-        ssp,
-        ssp_placement,
-        dsp_requests: Vec::new(), // 后续可以根据 active_dsps 和 dsp_placements 进行关联构造
-        start_time: std::time::Instant::now(),
-    };
-
+    // 构造全局状态 AppState，其中不在 main.rs 中构造 Context，
+    // 而在 API Handler 中根据请求中的参数构造具体的 Context。
     let state = Arc::new(AppState {
         runtime_logger: runtime_logger.clone(),
         config: config.clone(),
+        ssp_info,
     });
 
     let adx_server = tokio::spawn({

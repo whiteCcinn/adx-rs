@@ -1,145 +1,322 @@
-// openrtb/request.rs
+use serde::{Serialize, Deserialize};
+use once_cell::sync::OnceCell;
+use simd_json::base::ValueAsArray;
+use simd_json::OwnedValue;
 
-use serde::{Deserialize, Serialize};
-
-/// **Top-level OpenRTB Bid Request**
+/// OpenRTB BidRequest 结构体，
+/// 对于每个对象或数组字段采用延迟解析方式存储为 OwnedValue（owned, 'static），
+/// 并为每个大字段提供一个 lazy 缓存字段和 getter 方法。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BidRequest {
-    pub id: String,                 // 请求 ID，每个竞价请求唯一
-    pub imp: Vec<Imp>,              // 广告展示请求（Impression）列表
-    pub site: Option<Site>,         // 网站信息（如果请求来源是 Web）
-    pub app: Option<App>,           // 应用信息（如果请求来源是 App）
-    pub device: Option<Device>,     // 设备信息（用户的浏览器、IP、设备 ID）
-    pub user: Option<User>,         // 用户信息
-    pub test: Option<i32>,          // 是否是测试请求（1 = 测试模式, 0 = 真实竞价）
-    pub at: Option<i32>,            // 竞价模式（1 = 第一价格拍卖, 2 = 第二价格拍卖）
-    pub tmax: Option<u64>,          // 竞价超时时间（毫秒）
-    pub wseat: Option<Vec<String>>, // 允许的 DSP 供应商列表
-    pub bseat: Option<Vec<String>>, // 屏蔽的 DSP 供应商列表
-    pub allimps: Option<i32>,       // 是否对所有广告位都需要出价（1 = 是, 0 = 否）
-    pub cur: Option<Vec<String>>,   // 允许的货币（如 USD, CNY）
-    pub wlang: Option<Vec<String>>, // 允许的语言（ISO 639-1 格式）
-    pub bcat: Option<Vec<String>>,  // 屏蔽的广告类别（IAB 分类）
-    pub badv: Option<Vec<String>>,  // 屏蔽的广告主域名
-    pub source: Option<Source>,     // 竞价请求来源信息
-    pub regs: Option<Regs>,         // 隐私法规信息（如 GDPR、CCPA）
+    pub id: String,
+
+    /// 广告展示请求列表（imp）存储为 OwnedValue
+    pub imp: Box<OwnedValue>,
+    #[serde(skip)]
+    pub imp_details: OnceCell<Vec<ImpDetail>>,
+
+    /// 网站信息
+    pub site: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub site_detail: OnceCell<SiteDetail>,
+
+    /// 应用信息
+    pub app: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub app_detail: OnceCell<AppDetail>,
+
+    /// 设备信息
+    pub device: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub device_detail: OnceCell<DeviceDetail>,
+
+    /// 用户信息
+    pub user: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub user_detail: OnceCell<UserDetail>,
+
+    /// 请求来源信息
+    pub source: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub source_detail: OnceCell<SourceDetail>,
+
+    /// 隐私法规信息
+    pub regs: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub regs_detail: OnceCell<RegsDetail>,
+
+    // 其它简单字段
+    pub test: Option<i32>,
+    pub at: Option<i32>,
+    pub tmax: Option<u64>,
+    pub wseat: Option<Vec<String>>,
+    pub bseat: Option<Vec<String>>,
+    pub allimps: Option<i32>,
+    pub cur: Option<Vec<String>>,
+    pub wlang: Option<Vec<String>>,
+    pub bcat: Option<Vec<String>>,
+    pub badv: Option<Vec<String>>,
 }
 
-/// **Impression（广告展示请求）**
+/// ImpDetail 表示对 imp 数组中单个元素的解析结果
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Imp {
-    pub id: String,                  // 展示请求 ID
-    pub metric: Option<Vec<Metric>>, // 相关的度量指标（如可见性、点击率）
-    pub banner: Option<Banner>,      // Banner 广告信息
-    pub video: Option<Video>,        // 视频广告信息
-    pub audio: Option<Audio>,        // 音频广告信息
-    pub native: Option<Native>,      // 原生广告信息
-    pub pmp: Option<Pmp>,            // 私有交易市场信息
-    pub tagid: Option<String>,       // 该 Impression 在 SSP 系统中的标识符
-    pub bidfloor: Option<f64>,       // 最低竞价（默认货币单位）
-    pub bidfloorcur: Option<String>, // 最低竞价的货币类型（如 USD, EUR）
+pub struct ImpDetail {
+    pub id: String,
+    pub bidfloor: Option<f64>,
+
+    /// banner 信息延迟解析：原始 JSON 存为 OwnedValue
+    pub banner: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub banner_detail: OnceCell<BannerDetail>,
+
+    /// video 信息延迟解析
+    pub video: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub video_detail: OnceCell<VideoDetail>,
+
+    /// audio 信息延迟解析
+    pub audio: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub audio_detail: OnceCell<AudioDetail>,
+
+    /// native 信息延迟解析
+    pub native: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub native_detail: OnceCell<NativeDetail>,
+
+    /// pmp 信息延迟解析
+    pub pmp: Option<Box<OwnedValue>>,
+    #[serde(skip)]
+    pub pmp_detail: OnceCell<PmpDetail>,
 }
 
-/// **Metric（广告度量）**
+/// BannerDetail 表示 banner 解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Metric {
-    pub r#type: String,         // 度量类型（如 "click-through"）
-    pub value: f64,             // 度量的数值
-    pub vendor: Option<String>, // 供应商（如 Google, Nielsen）
+pub struct BannerDetail {
+    pub w: i32,
+    pub h: i32,
+    // 可扩展其它字段
 }
 
-/// **Banner（横幅广告）**
+/// VideoDetail 表示 video 解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Banner {
-    pub w: Option<i32>,              // Banner 宽度（像素）
-    pub h: Option<i32>,              // Banner 高度（像素）
-    pub format: Option<Vec<Format>>, // 允许的广告格式（多个尺寸）
+pub struct VideoDetail {
+    pub mimes: Vec<String>,
+    pub minduration: Option<i32>,
+    pub maxduration: Option<i32>,
+    pub protocols: Option<Vec<i32>>,
+    pub w: Option<i32>,
+    pub h: Option<i32>,
 }
 
-/// **Video（视频广告）**
+/// AudioDetail 表示 audio 解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Video {
-    pub mimes: Vec<String>,          // 支持的视频格式（如 video/mp4）
-    pub minduration: Option<i32>,    // 最短持续时间（秒）
-    pub maxduration: Option<i32>,    // 最长持续时间（秒）
-    pub protocols: Option<Vec<i32>>, // 支持的视频协议（如 VAST）
-    pub w: Option<i32>,              // 视频宽度（像素）
-    pub h: Option<i32>,              // 视频高度（像素）
+pub struct AudioDetail {
+    pub mimes: Vec<String>,
+    pub minduration: Option<i32>,
+    pub maxduration: Option<i32>,
 }
 
-/// **Audio（音频广告）**
+/// NativeDetail 表示 native 解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Audio {
-    pub mimes: Vec<String>,       // 支持的音频格式（如 audio/mp3）
-    pub minduration: Option<i32>, // 最短播放时长（秒）
-    pub maxduration: Option<i32>, // 最长播放时长（秒）
+pub struct NativeDetail {
+    pub request: String,
+    // 可扩展其它 native 字段
 }
 
-/// **Native（原生广告）**
+/// PmpDetail 表示 pmp 解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Native {
-    pub request: String, // 原生广告请求 JSON
+pub struct PmpDetail {
+    pub private_auction: Option<i32>,
+    pub deals: Option<Vec<Deal>>,
 }
 
-/// **Format（Banner 格式）**
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Format {
-    pub w: i32, // 宽度（像素）
-    pub h: i32, // 高度（像素）
-}
-
-/// **PMP（私有交易市场）**
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Pmp {
-    pub private_auction: Option<i32>, // 是否仅限私有竞价（1 = 是, 0 = 否）
-    pub deals: Option<Vec<Deal>>,     // 允许的交易
-}
-
-/// **交易信息**
+/// Deal 表示 pmp 中的交易信息
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Deal {
-    pub id: String,            // 交易 ID
-    pub bidfloor: Option<f64>, // 最低竞价（货币单位）
+    pub id: String,
+    pub bidfloor: Option<f64>,
 }
 
-/// **网站信息**
+/// SiteDetail 表示网站信息解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Site {
-    pub id: String,             // 网站 ID
-    pub name: Option<String>,   // 网站名称
-    pub domain: Option<String>, // 网站域名
+pub struct SiteDetail {
+    pub id: String,
+    pub name: Option<String>,
+    pub domain: Option<String>,
 }
 
-/// **App 信息**
+/// AppDetail 表示应用信息解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct App {
-    pub id: String,           // 应用 ID
-    pub name: Option<String>, // 应用名称
+pub struct AppDetail {
+    pub id: String,
+    pub name: Option<String>,
 }
 
-/// **设备信息**
+/// DeviceDetail 表示设备信息解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Device {
-    pub ua: Option<String>, // 用户代理（User-Agent）
-    pub ip: Option<String>, // 设备 IP 地址
+pub struct DeviceDetail {
+    pub ua: Option<String>,
+    pub ip: Option<String>,
 }
 
-/// **用户信息**
+/// UserDetail 表示用户信息解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct User {
-    pub id: Option<String>, // 用户 ID
+pub struct UserDetail {
+    pub id: Option<String>,
 }
 
-/// **Source（请求来源）**
+/// SourceDetail 表示请求来源解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Source {
-    pub fd: Option<i32>,     // 是否来自上游 DSP（1 = 是, 0 = 否）
-    pub tid: Option<String>, // 交易 ID
+pub struct SourceDetail {
+    pub fd: Option<i32>,
+    pub tid: Option<String>,
 }
 
-/// **Regs（隐私法规）**
+/// RegsDetail 表示隐私法规解析后的数据结构
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Regs {
-    pub coppa: Option<i32>, // COPPA（儿童隐私保护）(1 = 是, 0 = 否)
-    pub gdpr: Option<i32>,  // GDPR 适用性（1 = 是, 0 = 否）
+pub struct RegsDetail {
+    pub coppa: Option<i32>,
+    pub gdpr: Option<i32>,
+}
+
+// Getter 方法实现
+impl BidRequest {
+    pub fn get_imp_details(&self) -> &Vec<ImpDetail> {
+        self.imp_details.get_or_init(|| {
+            if let Some(arr) = self.imp.as_array() {
+                arr.iter().map(|item| {
+                    let s = serde_json::to_string(&*item)
+                        .expect("Failed to convert imp item to JSON string");
+                    serde_json::from_str(&s)
+                        .expect("Failed to parse imp item into ImpDetail")
+                }).collect()
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    pub fn get_site_detail(&self) -> Option<&SiteDetail> {
+        self.site.as_ref().map(|raw| {
+            self.site_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert site to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse site into SiteDetail")
+            })
+        })
+    }
+
+    pub fn get_app_detail(&self) -> Option<&AppDetail> {
+        self.app.as_ref().map(|raw| {
+            self.app_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert app to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse app into AppDetail")
+            })
+        })
+    }
+
+    pub fn get_device_detail(&self) -> Option<&DeviceDetail> {
+        self.device.as_ref().map(|raw| {
+            self.device_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert device to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse device into DeviceDetail")
+            })
+        })
+    }
+
+    pub fn get_user_detail(&self) -> Option<&UserDetail> {
+        self.user.as_ref().map(|raw| {
+            self.user_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert user to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse user into UserDetail")
+            })
+        })
+    }
+
+    pub fn get_source_detail(&self) -> Option<&SourceDetail> {
+        self.source.as_ref().map(|raw| {
+            self.source_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert source to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse source into SourceDetail")
+            })
+        })
+    }
+
+    pub fn get_regs_detail(&self) -> Option<&RegsDetail> {
+        self.regs.as_ref().map(|raw| {
+            self.regs_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert regs to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse regs into RegsDetail")
+            })
+        })
+    }
+}
+
+impl ImpDetail {
+    pub fn get_banner_detail(&self) -> Option<&BannerDetail> {
+        self.banner.as_ref().map(|raw| {
+            self.banner_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert banner to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse banner into BannerDetail")
+            })
+        })
+    }
+
+    pub fn get_video_detail(&self) -> Option<&VideoDetail> {
+        self.video.as_ref().map(|raw| {
+            self.video_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert video to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse video into VideoDetail")
+            })
+        })
+    }
+
+    pub fn get_audio_detail(&self) -> Option<&AudioDetail> {
+        self.audio.as_ref().map(|raw| {
+            self.audio_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert audio to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse audio into AudioDetail")
+            })
+        })
+    }
+
+    pub fn get_native_detail(&self) -> Option<&NativeDetail> {
+        self.native.as_ref().map(|raw| {
+            self.native_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert native to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse native into NativeDetail")
+            })
+        })
+    }
+
+    pub fn get_pmp_detail(&self) -> Option<&PmpDetail> {
+        self.pmp.as_ref().map(|raw| {
+            self.pmp_detail.get_or_init(|| {
+                let s = serde_json::to_string(&*raw)
+                    .expect("Failed to convert pmp to JSON string");
+                serde_json::from_str(&s)
+                    .expect("Failed to parse pmp into PmpDetail")
+            })
+        })
+    }
 }
